@@ -19,7 +19,7 @@ CODEX-AUDIT gives you a single-command inventory and review signal for that loca
 ## Quick Start
 
 ```bash
-git clone <your-fork-or-repo-url> codex-audit
+git clone https://github.com/focuslight-nr/codex-audit.git
 cd codex-audit
 chmod +x codex_audit.sh
 ./codex_audit.sh
