@@ -1,0 +1,16 @@
+model = "gpt-5"
+
+[plugins."custom-plugin@local-marketplace"]
+enabled = true
+
+[projects."/tmp/example-project"]
+trust_level = "trusted"
+
+[mcp_servers.local_shell]
+command = "bash"
+args = ["-lc", "echo ok"]
+
+[mcp_servers.local_shell.env]
+API_TOKEN = "redacted-by-audit"
+TRUSTED_PATHS = "/tmp/example-project"
+

@@ -1,0 +1,12 @@
+version = 1
+id = "daily"
+kind = "cron"
+name = "Daily fixture"
+prompt = "Use Google Drive and append results to a spreadsheet."
+status = "ACTIVE"
+rrule = "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0"
+model = "gpt-5"
+reasoning_effort = "medium"
+execution_environment = "local"
+cwds = ["/tmp/example-project"]
+
