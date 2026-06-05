@@ -1,10 +1,10 @@
 # CODEX-AUDIT
 
-Codex のローカル設定を読み取り専用で監査する、macOS 向けの非公式ツールです。
+Codex のローカル設定を読み取り専用で監査する、macOS / Windows 向けの非公式ツールです。
 
 > CODEX-AUDIT は独立した非公式プロジェクトです。OpenAI による提供、承認、スポンサー、保守を受けているものではありません。"OpenAI"、"Codex" および関連する製品名は OpenAI の商標である可能性があります。本 README では、ユーザーのローカル Codex 設定との相互運用性を説明する目的でのみ参照しています。
 
-`codex_audit.sh` は `~/.codex` 配下のローカル状態を確認し、Codex の実行面に関係する設定をレポートします。対象には MCP サーバー、有効化されたプラグイン、アプリ連携、trusted project、skill、自動化、機密性の高いローカルファイル、ローカル履歴、実行中の状態などが含まれます。
+`codex_audit.sh` / `codex_audit.ps1` は `~/.codex` 配下のローカル状態を確認し、Codex の実行面に関係する設定をレポートします。対象には MCP サーバー、有効化されたプラグイン、アプリ連携、trusted project、skill、自動化、機密性の高いローカルファイル、ローカル履歴、実行中の状態などが含まれます。
 
 このスクリプトは読み取り専用です。監査対象ファイルを変更しません。
 
@@ -16,6 +16,8 @@ CODEX-AUDIT は、そのローカル状態を 1 コマンドで一覧化し、�
 
 ## クイックスタート
 
+macOS:
+
 ```bash
 git clone https://github.com/focuslight-nr/codex-audit.git
 cd codex-audit
@@ -23,22 +25,30 @@ chmod +x codex_audit.sh
 ./codex_audit.sh
 ```
 
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/focuslight-nr/codex-audit.git
+cd codex-audit
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1
+```
+
 サマリ表示:
 
-```bash
-./codex_audit.sh --summary
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1 --summary
 ```
 
 JSON 出力:
 
-```bash
-./codex_audit.sh --json | jq .
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1 --json
 ```
 
 HTML レポート:
 
-```bash
-./codex_audit.sh --html --output codex-audit.html
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1 --html --output codex-audit.html
 ```
 
 ## 出力例
@@ -78,7 +88,7 @@ esp  WARN=4 REVIEW=6 INFO=6  ~/.codex
 | Sensitive Files | `auth.json`、global state、installation ID、session index |
 | Local Data | SQLite DB / WAL file の存在、大きいファイルの REVIEW |
 | Retention | session、archived session、shell snapshot、ambient suggestion の件数、サイズ、最新更新日時 |
-| Runtime | 実行中 Codex process、sleep assertion、LaunchAgents、crontab |
+| Runtime | 実行中 Codex process、macOS の sleep assertion / LaunchAgents / crontab、Windows scheduled task |
 
 ## Severity Model
 
@@ -173,7 +183,7 @@ diff の比較対象:
 - automation ID
 - skill の `source:name`
 
-`--diff` と `--diff-json` には `jq` が必要です。
+`codex_audit.sh` の `--diff` と `--diff-json` には `jq` が必要です。PowerShell 版は標準の JSON 機能を使います。
 
 ## Policy Gate Mode
 
@@ -192,10 +202,10 @@ exit code:
 
 ## 必要条件
 
-- macOS
-- zsh
-- 通常監査では `jq` は任意
-- `--diff`、`--diff-json`、fixture test runner には `jq` が必要
+- macOS: zsh
+- Windows: Windows PowerShell 5.1 以降、または PowerShell 7 以降
+- macOS 版の `--diff`、`--diff-json`、fixture test runner には `jq` が必要
+- Windows PowerShell 版は JSON / diff に PowerShell 標準の JSON 機能を使うため、`jq` は不要
 
 Homebrew で `jq` を入れる場合:
 
@@ -209,6 +219,12 @@ fixture を使った smoke test:
 
 ```bash
 tests/run.sh
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
 ```
 
 test runner は `--codex-dir tests/fixtures/basic/.codex` を使います。そのため、現在ユーザーの実際の Codex 設定には依存しません。
@@ -228,15 +244,15 @@ test runner は `--codex-dir tests/fixtures/basic/.codex` を使います。そ�
 
 解消または緩和済み:
 
-- 通常監査は `jq` なしでも動作。plugin metadata は path 由来の値に fallback
-- macOS 専用であることを preflight で明示
+- macOS の通常監査は `jq` なしでも動作。plugin metadata は path 由来の値に fallback
+- `codex_audit.ps1` により Windows PowerShell での監査に対応
 - 未知の `config.toml` section を INFO として表示し、format drift に気づけるようにしている
 - `--codex-dir` により fixture / コピー済み Codex directory の監査に対応
 
 残る制限:
 
-- macOS/Zsh のみ。Windows 対応には別途 PowerShell port が必要
-- `--diff` と `--diff-json` には `jq` が必要
+- macOS と Windows の collector は別スクリプトで、OS 固有の runtime check には差分がある
+- macOS 版の `--diff` と `--diff-json` には `jq` が必要
 - plugin provenance は heuristic。CODEX-AUDIT は署名検証をしない
 - signature-related artifact detection は存在確認のみ
 - Codex の設定形式が変わる可能性がある。未知 section は表示するが、新しい意味づけには collector 更新が必要な場合がある

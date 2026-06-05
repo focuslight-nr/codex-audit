@@ -1,12 +1,12 @@
 # CODEX-AUDIT
 
-Unofficial, read-only local security audit tool for Codex on macOS.
+Unofficial, read-only local security audit tool for Codex on macOS and Windows.
 
 > CODEX-AUDIT is an independent project. It is not affiliated with, endorsed by, sponsored by, or maintained by OpenAI. "OpenAI", "Codex", and related product names may be trademarks of OpenAI and are referenced only to describe interoperability with local Codex configuration.
 
 日本語版 README: [README.ja.md](README.ja.md)
 
-`codex_audit.sh` inspects local Codex state under `~/.codex` and reports configuration that affects Codex's execution surface: MCP servers, enabled plugins, app connectors, trusted projects, skills, automations, sensitive files, local retention, and runtime state.
+`codex_audit.sh` / `codex_audit.ps1` inspects local Codex state under `~/.codex` and reports configuration that affects Codex's execution surface: MCP servers, enabled plugins, app connectors, trusted projects, skills, automations, sensitive files, local retention, and runtime state.
 
 The script is read-only. It does not modify audited files.
 
@@ -18,6 +18,8 @@ CODEX-AUDIT gives you a single-command inventory and review signal for that loca
 
 ## Quick Start
 
+macOS:
+
 ```bash
 git clone https://github.com/focuslight-nr/codex-audit.git
 cd codex-audit
@@ -25,22 +27,30 @@ chmod +x codex_audit.sh
 ./codex_audit.sh
 ```
 
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/focuslight-nr/codex-audit.git
+cd codex-audit
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1
+```
+
 Summary view:
 
-```bash
-./codex_audit.sh --summary
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1 --summary
 ```
 
 JSON:
 
-```bash
-./codex_audit.sh --json | jq .
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1 --json
 ```
 
 HTML report:
 
-```bash
-./codex_audit.sh --html --output codex-audit.html
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\codex_audit.ps1 --html --output codex-audit.html
 ```
 
 ## Example Output
@@ -80,7 +90,7 @@ esp  WARN=4 REVIEW=6 INFO=6  ~/.codex
 | Sensitive Files | `auth.json`, global state, installation ID, session index |
 | Local Data | SQLite DB and WAL file presence and large-file review findings |
 | Retention | Session, archived session, shell snapshot, and ambient suggestion counts/sizes/latest mtimes |
-| Runtime | Running Codex processes, sleep assertions, LaunchAgents, crontab |
+| Runtime | Running Codex processes, macOS sleep assertions / LaunchAgents / crontab, Windows scheduled tasks |
 
 ## Severity Model
 
@@ -175,7 +185,7 @@ Diff compares:
 - automations by ID
 - skills by `source:name`
 
-`--diff` and `--diff-json` require `jq`.
+`--diff` and `--diff-json` require `jq` for `codex_audit.sh`. The PowerShell port uses built-in JSON support.
 
 ## Policy Gate Mode
 
@@ -194,10 +204,11 @@ Exit codes:
 
 ## Requirements
 
-- macOS
-- zsh
-- `jq` optional for normal audits
-- `jq` required for `--diff`, `--diff-json`, and the fixture test runner
+- macOS: zsh
+- Windows: Windows PowerShell 5.1 or PowerShell 7+
+- `jq` optional for normal macOS audits
+- `jq` required for macOS `--diff`, `--diff-json`, and the macOS fixture test runner
+- The Windows PowerShell port does not require `jq`
 
 Install `jq` with Homebrew if needed:
 
@@ -213,6 +224,12 @@ Run the fixture-based smoke test:
 tests/run.sh
 ```
 
+Windows PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
+```
+
 The test runner uses `--codex-dir tests/fixtures/basic/.codex` so it does not depend on the current user's real Codex configuration.
 
 ## Security Properties
@@ -221,7 +238,7 @@ The test runner uses `--codex-dir tests/fixtures/basic/.codex` so it does not de
 - No network calls
 - Sensitive-looking config values are redacted where displayed
 - MCP environment values are not printed, only env var names
-- HTML output is written with owner-only permissions through `umask 077`
+- macOS HTML output is written with owner-only permissions through `umask 077`
 - Path redaction is available with `--redact-paths`
 - Plugin provenance is heuristic metadata classification, not cryptographic signature verification
 - Signature artifact detection only reports files with signature-like names; it does not validate signatures
@@ -230,15 +247,15 @@ The test runner uses `--codex-dir tests/fixtures/basic/.codex` so it does not de
 
 Resolved or mitigated limitations:
 
-- Normal audits do not require `jq`; plugin metadata falls back to path-derived values when `jq` is unavailable.
-- macOS-only behavior is enforced with an explicit preflight check.
+- Normal macOS audits do not require `jq`; plugin metadata falls back to path-derived values when `jq` is unavailable.
+- Windows PowerShell audits are supported by `codex_audit.ps1`.
 - Unknown `config.toml` sections are reported as INFO so config format drift is visible.
 - Fixture testing is supported through `--codex-dir`.
 
 Remaining limitations:
 
-- macOS/Zsh only. Windows would require a separate PowerShell port.
-- `--diff` and `--diff-json` require `jq`.
+- macOS and Windows collectors are separate scripts and may differ in OS-specific runtime checks.
+- macOS `--diff` and `--diff-json` require `jq`.
 - Plugin provenance is heuristic only; CODEX-AUDIT does not verify signatures.
 - Signature-related artifact detection is an existence check only.
 - Codex configuration formats may change; unknown sections are surfaced, but new semantics may require collector updates.
