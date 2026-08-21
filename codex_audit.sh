@@ -639,10 +639,16 @@ json_array_rows() {
     printf '%s' "$out"
 }
 
+# Pick the nth (1-based) |-delimited field out of a packed inventory row.
+# NOTE: the assignments must stay on separate lines. In zsh the right-hand sides
+# of a single `local a=$1 b=$a` are all expanded before any assignment takes
+# effect, so `rest` would pick up an outer variable named `row` instead of the
+# argument -- returning another row's contents, or nothing at all.
 json_split_field() {
-    local row="$1" n="$2" rest="$row" part i
+    local row="$1" n="$2"
+    local rest="$row"
+    local i
     for ((i=1; i<n; i++)); do
-        part="${rest%%|*}"
         rest="${rest#*|}"
     done
     printf '%s' "${rest%%|*}"
