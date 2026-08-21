@@ -38,6 +38,10 @@ try {
     $htmlPath = Join-Path $tmp "report.html"
     & powershell -NoProfile -ExecutionPolicy Bypass -File $script --codex-dir $fixture --html --output $htmlPath | Out-Null
     if (-not (Test-Path -LiteralPath $htmlPath) -or (Get-Item -LiteralPath $htmlPath).Length -le 0) { throw "HTML report was not written" }
+    $html = Get-Content -LiteralPath $htmlPath -Raw
+    foreach ($section in @("MCP Servers", "Enabled Plugins", "Plugin Cache", "Trusted Projects", "Automations", "Skills", "Sensitive Files", "Retention")) {
+        if ($html -notlike "*$section*") { throw "HTML report missing section: $section" }
+    }
 
     Write-Output "All PowerShell tests passed."
 } finally {

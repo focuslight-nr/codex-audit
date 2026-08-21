@@ -717,6 +717,22 @@ function Render-Diff([string]$Baseline, [string[]]$Users) {
     return ($lines -join [Environment]::NewLine)
 }
 
+function Add-HtmlListSection([System.Collections.Generic.List[string]]$Parts, [string]$Title, [object[]]$Rows) {
+    $Parts.Add("<h2>$(Html-Escape $Title)</h2>") | Out-Null
+    $Parts.Add("<table><tbody>") | Out-Null
+    if (-not $Rows -or $Rows.Count -eq 0) {
+        $Parts.Add("<tr><td>none</td><td></td></tr>") | Out-Null
+    } else {
+        foreach ($row in $Rows) {
+            $parts = ([string]$row).Split("|", 2)
+            $first = $parts[0]
+            $rest = if ($parts.Count -gt 1) { $parts[1] } else { "" }
+            $Parts.Add("<tr><td>$(Html-Escape (Display-Text $first))</td><td><code>$(Html-Escape (Display-Text $rest))</code></td></tr>") | Out-Null
+        }
+    }
+    $Parts.Add("</tbody></table>") | Out-Null
+}
+
 function Render-Html([string[]]$Users) {
     $parts = New-Object System.Collections.Generic.List[string]
     $parts.Add('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CODEX-AUDIT Report</title><style>body{margin:0;background:#101317;color:#e7edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1180px;margin:0 auto;padding:32px 20px}h1{margin:0 0 8px;font-size:28px}h2{margin:28px 0 10px;font-size:18px}.report{border-top:1px solid #2a3340;padding:24px 0}.meta{color:#aab6c4;margin:4px 0}code{color:#d7e7ff;white-space:pre-wrap;word-break:break-word}.summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:20px 0}.summary div{background:#171d24;border:1px solid #2a3340;border-radius:6px;padding:12px}.summary span{display:block;color:#aab6c4;font-size:12px}.summary strong{font-size:24px}table{width:100%;border-collapse:collapse;background:#141920;border:1px solid #2a3340}th,td{padding:9px 10px;border-bottom:1px solid #2a3340;text-align:left;vertical-align:top;font-size:13px}th{color:#aab6c4;background:#171d24}.badge{display:inline-block;border-radius:4px;padding:2px 6px;font-weight:700;font-size:12px}.warn{background:#5c2e12;color:#ffd7b0}.review{background:#51450f;color:#fff0a3}.info{background:#173956;color:#bfe4ff}</style></head><body><main>') | Out-Null
@@ -730,7 +746,26 @@ function Render-Html([string[]]$Users) {
             if ($Script:OptQuiet -and $f.severity -eq "INFO") { continue }
             $parts.Add("<tr><td><span class=`"badge $($f.severity.ToLowerInvariant())`">$(Html-Escape $f.severity)</span></td><td>$(Html-Escape $f.section)</td><td>$(Html-Escape (Display-Text $f.message))</td><td><code>$(Html-Escape (Display-Text $f.detail))</code></td></tr>") | Out-Null
         }
-        $parts.Add('</tbody></table></section>') | Out-Null
+        $parts.Add('</tbody></table>') | Out-Null
+
+        $parts.Add('<h2>MCP Servers</h2><table><thead><tr><th>Name</th><th>Command</th><th>Args</th><th>Env Keys</th></tr></thead><tbody>') | Out-Null
+        if ($Script:McpNames.Count -eq 0) {
+            $parts.Add('<tr><td>none</td><td></td><td></td><td></td></tr>') | Out-Null
+        } else {
+            foreach ($name in $Script:McpNames) {
+                $parts.Add("<tr><td>$(Html-Escape (Display-Text $name))</td><td><code>$(Html-Escape (Display-Text ([string]$Script:McpCmds[$name])))</code></td><td><code>$(Html-Escape (Display-Text ([string]$Script:McpArgs[$name])))</code></td><td><code>$(Html-Escape ([string]$Script:McpEnvKeys[$name]))</code></td></tr>") | Out-Null
+            }
+        }
+        $parts.Add('</tbody></table>') | Out-Null
+
+        Add-HtmlListSection $parts "Enabled Plugins" @($Script:Plugins | ForEach-Object { "$($_.id)|$($_.enabled)" })
+        Add-HtmlListSection $parts "Plugin Cache" @($Script:PluginDetails | ForEach-Object { "$($_.name)|$($_.version)|$($_.publisher)|$($_.marketplace)|$($_.path)|$($_.provenance)|$($_.signature_artifacts)" })
+        Add-HtmlListSection $parts "Trusted Projects" @($Script:TrustedProjects | ForEach-Object { "$($_.path)|$($_.trust_level)" })
+        Add-HtmlListSection $parts "Automations" @($Script:Automations | ForEach-Object { "$($_.id)|$($_.name)|$($_.kind)|$($_.status)|$($_.rrule)|$($_.model)|$($_.execution_environment)|$($_.cwds)|$($_.risk_tags)" })
+        Add-HtmlListSection $parts "Skills" @($Script:Skills | ForEach-Object { "$($_.name)|$($_.source)|$($_.description)|$($_.path)" })
+        Add-HtmlListSection $parts "Sensitive Files" @($Script:SensitiveFiles | ForEach-Object { "$($_.name)|$($_.mode)|$($_.path)" })
+        Add-HtmlListSection $parts "Retention" @($Script:RetentionItems | ForEach-Object { "$($_.name)|$($_.file_count)|$($_.bytes)|$($_.latest_mtime)|$($_.path)" })
+        $parts.Add('</section>') | Out-Null
     }
     $parts.Add('</main></body></html>') | Out-Null
     return ($parts -join [Environment]::NewLine)
