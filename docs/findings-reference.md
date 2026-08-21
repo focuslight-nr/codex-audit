@@ -36,6 +36,24 @@ Why it matters: the config can reveal enabled integrations, trusted projects, MC
 
 Why it matters: Codex configuration formats may evolve. Unknown sections are not treated as suspicious by default, but they are surfaced so collector coverage gaps are visible.
 
+### Additional config layers
+
+Reports `$CODEX_HOME/*.config.toml` profiles and `.codex/config.toml` files in trusted projects.
+
+Why it matters: active profile and trusted-project layers can change tools, permissions, hooks, providers, and instructions beyond the base user config.
+
+## Permissions and Network
+
+Reports security-relevant settings including `approval_policy = "never"`, automatic approval review, `sandbox_mode = "danger-full-access"`, `default_permissions = ":danger-full-access"`, extra writable roots, workspace-write network access, custom permission profiles, full network mode, dangerous proxy/socket flags, and live web search.
+
+Why it matters: these settings control whether Codex pauses for a person, how broadly commands can read/write, and whether commands or hosted search can reach external systems.
+
+## Instructions, Environment, and Telemetry
+
+Reports global `AGENTS.md`, custom instruction files, developer instructions, subagent config files, explicitly injected shell variables, and raw prompt telemetry export.
+
+Why it matters: instruction sources influence model behavior; injected environment variables can carry authority into subprocesses; raw prompt telemetry can move sensitive conversation content to an exporter.
+
 ## Features
 
 Reports feature flags from `[features]`.
@@ -98,6 +116,12 @@ An app connector is enabled under `[apps]`.
 
 Why it matters: connectors can provide access to external accounts or services. Confirm the connector ID maps to an expected integration.
 
+### App approval and capability policy
+
+Reports app-level and per-tool approval modes, automatic reviewers, and `destructive_enabled` or `open_world_enabled` settings. `approval_mode = "approve"` is a WARN because the matching tool is persistently pre-approved.
+
+Why it matters: app tools can write to external services, perform destructive actions, or interact with the open world without a per-call prompt when policy allows it.
+
 ## MCP Servers
 
 ### MCP server configured
@@ -124,6 +148,26 @@ Why it matters: values are intentionally not printed, but key names can still sh
 The MCP command basename matches a command-capable runtime such as `bash`, `python`, `node`, `osascript`, `curl`, or similar.
 
 Why it matters: these runtimes can execute arbitrary code or interact with network/system resources. Confirm command, args, and env keys.
+
+### MCP and plugin-MCP approval policy
+
+Reports default and per-tool approval modes for direct and plugin-provided MCP servers. `approval_mode = "approve"` is a WARN.
+
+Why it matters: persistent approval can remove the normal human checkpoint before a tool invocation.
+
+## Hooks and Rules
+
+### Command hook configured
+
+Reports command handlers from inline `[hooks]` tables and `hooks.json` files in user and trusted-project layers. Cached plugin hook files are inventoried separately.
+
+Why it matters: hooks execute deterministic commands at lifecycle events. Multiple matching hooks can run, so each source and command should be reviewed.
+
+### Persistent allow rules configured
+
+Reports `.rules` files and counts rules whose decision is `allow`.
+
+Why it matters: allow rules persistently authorize matching commands without a new approval prompt.
 
 ## Skills
 
@@ -170,7 +214,11 @@ Compared areas:
 - MCP servers by name
 - enabled plugins by ID
 - app connectors by ID
+- app approval policies
 - trusted projects by path
+- config layers
+- hook sources
+- command rule files
 - automations by ID
 - skills by `source:name`
 
@@ -260,6 +308,12 @@ Why it matters: these files can contain local state, logs, or session metadata.
 Large local data file detected.
 
 Why it matters: large state/log files may indicate long retention or substantial local history. Review retention expectations.
+
+## Execution Config and Current Local Data
+
+Reports Browser, Computer Use, and Chrome native-host configuration, plus SQLite/DB and WAL files up to two levels below the Codex home. This includes current state, goals, logs, queues, and Memories stores.
+
+Why it matters: these files describe or retain browser/computer-control integration and local agent state. Large databases also increase the amount of locally retained material.
 
 ## Retention
 

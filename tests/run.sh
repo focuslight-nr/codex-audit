@@ -13,6 +13,14 @@ zsh -n "$SCRIPT"
 "$SCRIPT" --codex-dir "$FIXTURE" --json > "$TMPDIR/audit.json"
 jq -e '.summary.warn >= 1 and .summary.review >= 1' "$TMPDIR/audit.json" >/dev/null
 jq -e '.mcp_servers[] | select(.name == "local_shell")' "$TMPDIR/audit.json" >/dev/null
+jq -e '.mcp_servers[] | select(.name == "local_shell" and (.approval_modes | contains("approve")))' "$TMPDIR/audit.json" >/dev/null
+jq -e '.apps[] | select(.id == "test_connector" and .enabled == "true")' "$TMPDIR/audit.json" >/dev/null
+jq -e '.app_policies[] | select(.id == "test_connector" and (.policy | contains("approval_mode=approve")))' "$TMPDIR/audit.json" >/dev/null
+jq -e '.hooks | length >= 2' "$TMPDIR/audit.json" >/dev/null
+jq -e '.rules[] | select(.path | endswith("default.rules"))' "$TMPDIR/audit.json" >/dev/null
+jq -e '.config_layers[] | select(.path | endswith("review.config.toml"))' "$TMPDIR/audit.json" >/dev/null
+jq -e '.findings[] | select(.message == "Approval prompts are disabled")' "$TMPDIR/audit.json" >/dev/null
+jq -e '.findings[] | select(.message | contains("Command hook configured"))' "$TMPDIR/audit.json" >/dev/null
 jq -e '.plugin_cache[] | select(.provenance == "local-or-third-party")' "$TMPDIR/audit.json" >/dev/null
 jq -e '.plugin_cache[] | select(.signature_artifacts == "custom-plugin.sig")' "$TMPDIR/audit.json" >/dev/null
 jq -e '.findings[] | select(.message | contains("Signature-related artifact"))' "$TMPDIR/audit.json" >/dev/null

@@ -2,6 +2,7 @@
 *.html
 *.json
 !tests/fixtures/**/plugin.json
+!tests/fixtures/**/hooks.json
 baseline*.json
 audit*.json
 summary*.txt

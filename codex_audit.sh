@@ -4,7 +4,7 @@
 # Unofficial project. Not affiliated with, endorsed by, sponsored by, or maintained by OpenAI.
 setopt PIPE_FAIL KSH_ARRAYS BASH_REMATCH TYPESET_SILENT NULL_GLOB
 
-VERSION="0.7.0"
+VERSION="0.8.0"
 SCRIPT_NAME="${0:t}"
 CODEX_DIR_NAME=".codex"
 DANGEROUS_MCP_HINTS="bash sh zsh python python3 node ruby perl osascript sqlite3 psql mysql curl wget nc ncat ssh scp"
@@ -34,15 +34,20 @@ FINDING_MSG=()
 FINDING_DET=()
 
 MCP_NAMES=()
-declare -A MCP_CMDS MCP_ARGS MCP_ENVKEYS
+declare -A MCP_CMDS MCP_ARGS MCP_ENVKEYS MCP_URLS MCP_ENABLED MCP_APPROVALS
 
 PLUGINS=()
 PLUGIN_DETAILS=()
 MARKETPLACES=()
 APPS=()
+APP_POLICIES=()
 TRUSTED_PROJECTS=()
 SKILLS=()
 AUTOMATIONS=()
+CONFIG_LAYERS=()
+HOOK_SOURCES=()
+RULE_FILES=()
+INSTRUCTION_FILES=()
 RUNTIME_ITEMS=()
 SENSITIVE_FILES=()
 RETENTION_ITEMS=()
@@ -253,13 +258,21 @@ reset_state() {
     MCP_CMDS=()
     MCP_ARGS=()
     MCP_ENVKEYS=()
+    MCP_URLS=()
+    MCP_ENABLED=()
+    MCP_APPROVALS=()
     PLUGINS=()
     PLUGIN_DETAILS=()
     MARKETPLACES=()
     APPS=()
+    APP_POLICIES=()
     TRUSTED_PROJECTS=()
     SKILLS=()
     AUTOMATIONS=()
+    CONFIG_LAYERS=()
+    HOOK_SOURCES=()
+    RULE_FILES=()
+    INSTRUCTION_FILES=()
     RUNTIME_ITEMS=()
     SENSITIVE_FILES=()
     RETENTION_ITEMS=()
@@ -296,99 +309,291 @@ parse_skill_frontmatter() {
     printf '%s|%s' "$name" "$desc"
 }
 
-collect_config() {
-    local cfg="$CODEX_DIR/config.toml"
-    if [[ ! -f "$cfg" ]]; then
-        add_finding "INFO" "Config" "config.toml not found" "$cfg"
-        return 0
-    fi
+array_contains() {
+    local needle="$1" item
+    shift
+    for item in "$@"; do
+        [[ "$item" == "$needle" ]] && return 0
+    done
+    return 1
+}
 
-    local mode
+known_config_section() {
+    local root="${1%%.*}"
+    case "$root" in
+        agents|analytics|apps|auto_review|computer_use|desktop|features|feedback|history|hooks|marketplaces|mcp_servers|memories|model_providers|notice|otel|permissions|plugins|profiles|projects|sandbox_workspace_write|shell_environment_policy|skills|tool_suggest|tools|tui|windows) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+record_config_policy() {
+    local full_key="$1" val="$2" layer="$3"
+    case "$full_key" in
+        approval_policy)
+            [[ "$val" == "never" ]] && add_finding "WARN" "Permissions" "Approval prompts are disabled" "approval_policy=never; layer=$layer"
+            [[ "$val" == "on-failure" ]] && add_finding "INFO" "Permissions" "Deprecated approval policy configured" "layer=$layer"
+            ;;
+        approvals_reviewer|apps.*.approvals_reviewer)
+            [[ "$val" == "auto_review" ]] && add_finding "REVIEW" "Permissions" "Approval prompts use automatic review" "$full_key=auto_review; layer=$layer"
+            ;;
+        sandbox_mode)
+            [[ "$val" == "danger-full-access" ]] && add_finding "WARN" "Permissions" "Full-access sandbox mode configured" "layer=$layer"
+            ;;
+        default_permissions)
+            [[ "$val" == ":danger-full-access" ]] && add_finding "WARN" "Permissions" "Danger-full-access permission profile is the default" "layer=$layer"
+            ;;
+        sandbox_workspace_write.network_access)
+            [[ "$val" == "true" ]] && add_finding "WARN" "Permissions" "Workspace-write sandbox has network access" "layer=$layer"
+            ;;
+        sandbox_workspace_write.writable_roots)
+            add_finding "REVIEW" "Permissions" "Additional writable roots configured" "$(redact_value "$full_key" "$val"); layer=$layer"
+            ;;
+        web_search)
+            [[ "$val" == "live" ]] && add_finding "REVIEW" "Network" "Live web search is enabled" "layer=$layer"
+            ;;
+        model_instructions_file|developer_instructions|agents.*.config_file)
+            add_finding "REVIEW" "Instructions" "Custom instruction source configured" "$full_key=$(redact_value "$full_key" "$val"); layer=$layer"
+            ;;
+        otel.log_user_prompt)
+            [[ "$val" == "true" ]] && add_finding "WARN" "Telemetry" "Raw user prompt export is enabled" "layer=$layer"
+            ;;
+        openai_base_url|chatgpt_base_url|mcp_oauth_callback_url)
+            add_finding "REVIEW" "Network" "Service endpoint override configured" "$full_key=$(redact_value "$full_key" "$val"); layer=$layer"
+            ;;
+        model_providers.*.experimental_bearer_token)
+            add_finding "WARN" "Providers" "Model provider stores a bearer token directly in config" "$full_key=[REDACTED]; layer=$layer"
+            ;;
+        model_providers.*.http_headers.*)
+            add_finding "REVIEW" "Providers" "Static model-provider HTTP header configured" "$full_key=[REDACTED]; layer=$layer"
+            ;;
+        features.network_proxy.dangerously_allow_all_unix_sockets|permissions.*.network.dangerously_allow_all_unix_sockets)
+            [[ "$val" == "true" ]] && add_finding "WARN" "Network" "Arbitrary Unix socket access is enabled" "$full_key=true; layer=$layer"
+            ;;
+        features.network_proxy.dangerously_allow_non_loopback_proxy|permissions.*.network.dangerously_allow_non_loopback_proxy)
+            [[ "$val" == "true" ]] && add_finding "WARN" "Network" "Non-loopback proxy binding is enabled" "$full_key=true; layer=$layer"
+            ;;
+        permissions.*.network.mode)
+            [[ "$val" == "full" ]] && add_finding "WARN" "Network" "Permission profile grants full network mode" "$full_key=full; layer=$layer"
+            ;;
+        permissions.*.network.enabled)
+            [[ "$val" == "true" ]] && add_finding "REVIEW" "Network" "Permission profile enables command network access" "$full_key=true; layer=$layer"
+            ;;
+    esac
+}
+
+collect_config_file() {
+    local cfg="$1" layer="$2" owner_sensitive="${3:-true}" mode
+    [[ -r "$cfg" ]] || return 0
+    CONFIG_LAYERS+=("$layer|$cfg")
     mode=$(file_mode "$cfg")
-    SENSITIVE_FILES+=("config.toml|$mode|$cfg")
-    [[ -n "$mode" && "$mode" != "600" && "$mode" != "400" ]] && add_finding "REVIEW" "Config" "config.toml is readable beyond the owner" "mode=$mode"
+    SENSITIVE_FILES+=("$(basename "$cfg")|$mode|$cfg")
+    [[ "$owner_sensitive" == "true" && -n "$mode" && "$mode" != "600" && "$mode" != "400" ]] && add_finding "REVIEW" "Config" "Config layer is readable beyond the owner" "layer=$layer; mode=$mode"
 
-    local section="" mcp="" key="" val="" raw="" plugin="" project="" marketplace="" app="" unknown_sections=()
+    local section="" mcp="" mcp_base=false key="" val="" raw="" plugin="" project="" marketplace="" app="" full_key="" existing="" unknown_sections=()
     while IFS= read -r raw; do
         raw="${raw%%#*}"
         [[ -z "${raw//[[:space:]]/}" ]] && continue
 
-        if [[ "$raw" =~ '^\[(.+)\]$' ]]; then
+        if [[ "$raw" =~ '^\[\[(.+)\]\]$' ]]; then
             section="${BASH_REMATCH[1]}"
-            mcp=""; plugin=""; project=""; marketplace=""; app=""
-            if [[ "$section" =~ '^mcp_servers\.([^.]*)$' ]]; then
+        elif [[ "$raw" =~ '^\[(.+)\]$' ]]; then
+            section="${BASH_REMATCH[1]}"
+        fi
+        if [[ "$raw" == \[* ]]; then
+            mcp=""; mcp_base=false; plugin=""; project=""; marketplace=""; app=""
+            if [[ "$section" =~ '^mcp_servers\."([^"]+)"($|\.)' ]]; then
                 mcp="${BASH_REMATCH[1]}"
-                mcp="${mcp#\"}"; mcp="${mcp%\"}"
-                MCP_NAMES+=("$mcp")
-            elif [[ "$section" =~ '^mcp_servers\.([^.]*)\.env$' ]]; then
+            elif [[ "$section" =~ '^mcp_servers\.([^.]*)($|\.)' ]]; then
                 mcp="${BASH_REMATCH[1]}"
-                mcp="${mcp#\"}"; mcp="${mcp%\"}"
-            elif [[ "$section" =~ '^plugins\."(.+)"$' ]]; then
-                plugin="${BASH_REMATCH[1]}"
-            elif [[ "$section" =~ '^projects\."(.+)"$' ]]; then
+            fi
+            if [[ -n "$mcp" && ( "$section" == "mcp_servers.$mcp" || "$section" == "mcp_servers.\"$mcp\"" ) ]]; then
+                mcp_base=true
+                array_contains "$mcp" "${MCP_NAMES[@]}" || MCP_NAMES+=("$mcp")
+            fi
+            [[ "$section" =~ '^plugins\."([^"]+)"($|\.)' ]] && plugin="${BASH_REMATCH[1]}"
+            if [[ "$section" =~ '^projects\."(.+)"$' ]]; then
                 project="${BASH_REMATCH[1]}"
             elif [[ "$section" =~ '^marketplaces\.([^.]*)$' ]]; then
                 marketplace="${BASH_REMATCH[1]}"
-            elif [[ "$section" =~ '^apps\.([^.]*)$' ]]; then
+            elif [[ "$section" =~ '^apps\."([^"]+)"($|\.)' ]]; then
                 app="${BASH_REMATCH[1]}"
-            elif [[ "$section" != "features" && "$section" != "desktop" && "$section" != marketplaces.* && "$section" != plugins.* && "$section" != projects.* && "$section" != mcp_servers.* && "$section" != apps.* ]]; then
+            elif [[ "$section" =~ '^apps\.([^.]*)($|\.)' ]]; then
+                app="${BASH_REMATCH[1]}"
+            fi
+            if [[ "$section" == permissions.* && "$section" != permissions.*.* ]]; then
+                add_finding "REVIEW" "Permissions" "Custom permission profile configured" "$section; layer=$layer"
+            elif [[ "$section" == model_providers.* && "$section" != model_providers.*.* ]]; then
+                add_finding "REVIEW" "Providers" "Custom model provider configured" "$section; layer=$layer"
+            elif ! known_config_section "$section"; then
                 unknown_sections+=("$section")
             fi
             continue
         fi
 
         [[ "$raw" == *"="* ]] || continue
-        key="${raw%%=*}"
-        val="${raw#*=}"
-        key="${key//[[:space:]]/}"
-        val="$(strip_quotes "$val")"
+        key="${raw%%=*}"; val="${raw#*=}"
+        key="${key//[[:space:]]/}"; val="$(strip_quotes "$val")"
+        full_key="${section:+$section.}$key"
+        record_config_policy "$full_key" "$val" "$layer"
 
         if [[ -n "$mcp" ]]; then
-            if [[ "$section" == mcp_servers.*.env ]]; then
-                local existing="${MCP_ENVKEYS[$mcp]}"
+            if [[ "$section" == mcp_servers.*.env || "$section" == mcp_servers.*.env_http_headers ]]; then
+                existing="${MCP_ENVKEYS[$mcp]}"
                 MCP_ENVKEYS[$mcp]="${existing}${existing:+, }$key"
-            elif [[ "$key" == "command" ]]; then
+            elif [[ "$section" == mcp_servers.*.http_headers ]]; then
+                existing="${MCP_ENVKEYS[$mcp]}"
+                MCP_ENVKEYS[$mcp]="${existing}${existing:+, }header:$key"
+                add_finding "REVIEW" "MCP Servers" "Static MCP HTTP header configured: $mcp" "header=$key; layer=$layer"
+            elif [[ "$mcp_base" == "true" && "$key" == "command" ]]; then
                 MCP_CMDS[$mcp]="$(redact_value "$key" "$val")"
-            elif [[ "$key" == "args" ]]; then
+            elif [[ "$mcp_base" == "true" && "$key" == "args" ]]; then
                 MCP_ARGS[$mcp]="$(redact_value "$key" "$val")"
+            elif [[ "$mcp_base" == "true" && "$key" == "url" ]]; then
+                MCP_URLS[$mcp]="$(redact_value "$key" "$val")"
+            elif [[ "$mcp_base" == "true" && "$key" == "enabled" ]]; then
+                MCP_ENABLED[$mcp]="$val"
+            elif [[ "$key" == "default_tools_approval_mode" || "$key" == "approval_mode" ]]; then
+                MCP_APPROVALS[$mcp]="${MCP_APPROVALS[$mcp]}${MCP_APPROVALS[$mcp]:+; }$full_key=$val"
+                [[ "$val" == "approve" ]] && add_finding "WARN" "MCP Servers" "MCP tool approval is bypassed: $mcp" "$full_key=approve; layer=$layer"
+            elif [[ "$mcp_base" == "true" && "$key" == "bearer_token_env_var" ]]; then
+                existing="${MCP_ENVKEYS[$mcp]}"
+                MCP_ENVKEYS[$mcp]="${existing}${existing:+, }$val"
             fi
-        elif [[ -n "$plugin" && "$key" == "enabled" ]]; then
+        elif [[ -n "$plugin" && "$section" == "plugins.\"$plugin\"" && "$key" == "enabled" ]]; then
             PLUGINS+=("$plugin|$val")
             [[ "$val" == "true" ]] && add_finding "REVIEW" "Plugins" "Enabled Codex plugin: $plugin"
+        elif [[ -n "$plugin" && ( "$key" == "default_tools_approval_mode" || "$key" == "approval_mode" ) ]]; then
+            [[ "$val" == "approve" ]] && add_finding "WARN" "Plugins" "Plugin MCP tool approval is bypassed: $plugin" "$full_key=approve; layer=$layer"
         elif [[ -n "$project" && "$key" == "trust_level" ]]; then
             TRUSTED_PROJECTS+=("$project|$val")
             [[ "$val" == "trusted" ]] && add_finding "WARN" "Projects" "Trusted project grants Codex broader workspace autonomy" "$project"
         elif [[ -n "$marketplace" && "$key" == "source" ]]; then
             MARKETPLACES+=("$marketplace|$(redact_value "$key" "$val")")
-        elif [[ -n "$app" && "$key" == "enabled" ]]; then
+        elif [[ -n "$app" && "$app" != "_default" && ( "$section" == "apps.$app" || "$section" == "apps.\"$app\"" ) && "$key" == "enabled" ]]; then
             APPS+=("$app|$val")
             [[ "$val" == "true" ]] && add_finding "REVIEW" "Connectors" "Enabled app connector: $app"
+        elif [[ -n "$app" && ( "$key" == "approval_mode" || "$key" == "default_tools_approval_mode" || "$key" == "approvals_reviewer" || "$key" == "destructive_enabled" || "$key" == "open_world_enabled" ) ]]; then
+            APP_POLICIES+=("$app|$full_key=$val")
+            [[ ( "$key" == "approval_mode" || "$key" == "default_tools_approval_mode" ) && "$val" == "approve" ]] && add_finding "WARN" "Connectors" "App tool approval is bypassed: $app" "$full_key=approve; layer=$layer"
+            [[ "$key" == "destructive_enabled" && "$val" == "true" ]] && add_finding "WARN" "Connectors" "Destructive app tools are enabled: $app" "layer=$layer"
+            [[ "$key" == "open_world_enabled" && "$val" == "true" ]] && add_finding "REVIEW" "Connectors" "Open-world app tools are enabled: $app" "layer=$layer"
         elif [[ "$section" == "desktop" && "$key" == "keepRemoteControlAwakeWhilePluggedIn" && "$val" == "true" ]]; then
             add_finding "WARN" "Desktop" "Remote control keep-awake is enabled" "keepRemoteControlAwakeWhilePluggedIn=true"
         elif [[ "$section" == "features" ]]; then
             add_finding "INFO" "Features" "$key=$val"
-        elif [[ "$key" == "notify" ]]; then
+        elif [[ -z "$section" && "$key" == "notify" ]]; then
             add_finding "INFO" "Config" "Notification hook configured" "$(redact_value "$key" "$val")"
-        elif [[ "$key" == "model" ]]; then
+        elif [[ -z "$section" && "$key" == "model" ]]; then
             add_finding "INFO" "Config" "Default model: $val"
+        elif [[ "$section" == hooks.* && "$key" == "command" ]]; then
+            local hook_event="${section#hooks.}"
+            hook_event="${hook_event%%.*}"
+            HOOK_SOURCES+=("$layer|inline:$hook_event|$(redact_value "$key" "$val")")
+            add_finding "WARN" "Hooks" "Command hook configured: $hook_event" "layer=$layer; command=$(redact_value "$key" "$val")"
+        elif [[ "$section" == model_providers.*.auth && "$key" == "command" ]]; then
+            add_finding "WARN" "Providers" "Model provider uses a command-backed credential" "$section; command=$(redact_value "$key" "$val"); layer=$layer"
+        elif [[ "$section" == shell_environment_policy.set ]]; then
+            if [[ "${(L)key}" =~ "$SENSITIVE_NAME_RE" ]]; then
+                add_finding "REVIEW" "Environment" "Sensitive-looking variable is injected into shell tools" "$key; layer=$layer"
+            else
+                add_finding "INFO" "Environment" "Shell environment variable is explicitly injected" "$key; layer=$layer"
+            fi
         fi
     done < "$cfg"
 
     if ((${#unknown_sections[@]} > 0)); then
         local uniq_unknown
         uniq_unknown="$(printf '%s\n' "${unknown_sections[@]}" | sort -u | paste -sd ', ' -)"
-        add_finding "INFO" "Config" "Unknown config section(s) present" "$uniq_unknown"
+        add_finding "INFO" "Config" "Unknown config section(s) present" "$uniq_unknown; layer=$layer"
     fi
+}
 
+collect_config() {
+    local cfg="$CODEX_DIR/config.toml" profile name
+    if [[ ! -f "$cfg" ]]; then
+        add_finding "INFO" "Config" "config.toml not found" "$cfg"
+    else
+        collect_config_file "$cfg" "user"
+    fi
+    for profile in "$CODEX_DIR"/*.config.toml; do
+        [[ "$profile" == "$cfg" ]] && continue
+        collect_config_file "$profile" "profile:$(basename "$profile")"
+        add_finding "REVIEW" "Config" "Codex config profile found" "$profile"
+    done
+
+}
+
+finalize_config_findings() {
+    local name
     for name in "${MCP_NAMES[@]}"; do
-        local cmd="${MCP_CMDS[$name]:-}"
-        add_finding "REVIEW" "MCP Servers" "MCP server configured: $name" "command=${cmd:-unknown}; env_keys=${MCP_ENVKEYS[$name]:-none}"
+        local cmd="${MCP_CMDS[$name]:-}" endpoint="${MCP_URLS[$name]:-${cmd:-unknown}}"
+        add_finding "REVIEW" "MCP Servers" "MCP server configured: $name" "endpoint=$endpoint; enabled=${MCP_ENABLED[$name]:-true}; env_keys=${MCP_ENVKEYS[$name]:-none}"
         local env_risks
         env_risks="$(mcp_env_risk_tags "${MCP_ENVKEYS[$name]:-}")"
         [[ -n "$env_risks" ]] && add_finding "REVIEW" "MCP Servers" "MCP server env keys imply elevated scope: $name" "$env_risks"
         for hint in ${(z)DANGEROUS_MCP_HINTS}; do
             [[ "$(basename "$cmd")" == "$hint" ]] && add_finding "WARN" "MCP Servers" "MCP server uses command-capable runtime: $name" "$cmd"
         done
+    done
+}
+
+record_hook_file() {
+    local file="$1" layer="$2" command found=false
+    [[ -r "$file" ]] || return 0
+    HOOK_SOURCES+=("$layer|hooks.json|$file")
+    if [[ "$HAS_JQ" == "true" ]]; then
+        while IFS= read -r command; do
+            [[ -n "$command" ]] || continue
+            found=true
+            add_finding "WARN" "Hooks" "Command hook configured in hooks.json" "layer=$layer; command=$(redact_value command "$command")"
+        done < <(jq -r '.. | objects | .command? // empty' "$file" 2>/dev/null)
+    fi
+    [[ "$found" == "false" ]] && add_finding "REVIEW" "Hooks" "Hook configuration file found" "layer=$layer; path=$file"
+}
+
+record_rule_file() {
+    local file="$1" layer="$2" allow_count=0
+    [[ -r "$file" ]] || return 0
+    RULE_FILES+=("$layer|$file")
+    allow_count=$(grep -Eo 'decision[[:space:]]*=[[:space:]]*"?allow"?' "$file" 2>/dev/null | wc -l | tr -d ' ')
+    if ((allow_count > 0)); then
+        add_finding "REVIEW" "Rules" "Persistent allow rule(s) configured" "layer=$layer; count=$allow_count; path=$file"
+    else
+        add_finding "INFO" "Rules" "Command rule file found" "layer=$layer; path=$file"
+    fi
+}
+
+collect_policy_files() {
+    local file row project trust project_codex
+
+    record_hook_file "$CODEX_DIR/hooks.json" "user"
+    for file in "$CODEX_DIR"/rules/*.rules; do
+        record_rule_file "$file" "user"
+    done
+    if [[ -r "$CODEX_DIR/AGENTS.md" ]]; then
+        INSTRUCTION_FILES+=("user|$CODEX_DIR/AGENTS.md")
+        add_finding "REVIEW" "Instructions" "Global AGENTS.md found" "$CODEX_DIR/AGENTS.md"
+    fi
+
+    local trusted_rows=("${TRUSTED_PROJECTS[@]}")
+    for row in "${trusted_rows[@]}"; do
+        project="${row%%|*}"; trust="${row#*|}"
+        [[ "$trust" == "trusted" && -d "$project" ]] || continue
+        project_codex="$project/.codex"
+        if [[ -r "$project_codex/config.toml" ]]; then
+            collect_config_file "$project_codex/config.toml" "project:$project" false
+            add_finding "REVIEW" "Config" "Trusted project config layer found" "$project_codex/config.toml"
+        fi
+        record_hook_file "$project_codex/hooks.json" "project:$project"
+        for file in "$project_codex"/rules/*.rules; do
+            record_rule_file "$file" "project:$project"
+        done
+    done
+
+    for file in "$CODEX_DIR"/plugins/cache/*/*/*/hooks/hooks.json; do
+        [[ -r "$file" ]] || continue
+        HOOK_SOURCES+=("plugin-cache|hooks.json|$file")
+        add_finding "INFO" "Hooks" "Cached plugin hook configuration found" "$file"
     done
 }
 
@@ -475,7 +680,7 @@ collect_automations() {
 
 collect_sensitive_files() {
     local p mode size
-    for p in "$CODEX_DIR"/auth.json "$CODEX_DIR"/.codex-global-state.json "$CODEX_DIR"/installation_id "$CODEX_DIR"/session_index.jsonl; do
+    for p in "$CODEX_DIR"/auth.json "$CODEX_DIR"/.codex-global-state.json "$CODEX_DIR"/.codex-global-state.json.bak "$CODEX_DIR"/installation_id "$CODEX_DIR"/session_index.jsonl; do
         [[ -e "$p" ]] || continue
         mode=$(file_mode "$p")
         SENSITIVE_FILES+=("$(basename "$p")|$mode|$p")
@@ -485,12 +690,18 @@ collect_sensitive_files() {
             add_finding "INFO" "Sensitive Files" "$(basename "$p") present" "mode=$mode"
         fi
     done
-    for p in "$CODEX_DIR"/*.sqlite "$CODEX_DIR"/*.sqlite-wal; do
+    for p in "$CODEX_DIR"/browser/config.toml "$CODEX_DIR"/computer-use/config.json "$CODEX_DIR"/chrome-native-hosts.json "$CODEX_DIR"/chrome-native-hosts-v2.json; do
+        [[ -e "$p" ]] || continue
+        mode=$(file_mode "$p")
+        SENSITIVE_FILES+=("$(basename "$p")|$mode|$p")
+        add_finding "REVIEW" "Execution Config" "Browser or Computer Use configuration found" "$p; mode=$mode"
+    done
+    while IFS= read -r p; do
         [[ -e "$p" ]] || continue
         size=$(stat -f '%z' "$p" 2>/dev/null || echo 0)
         add_finding "INFO" "Local Data" "$(basename "$p") present" "$(fmt_bytes "$size")"
         ((size > 104857600)) && add_finding "REVIEW" "Local Data" "$(basename "$p") is larger than 100 MB" "$(fmt_bytes "$size")"
-    done
+    done < <(find "$CODEX_DIR" -maxdepth 2 -type f \( -name '*.sqlite' -o -name '*.sqlite-wal' -o -name '*.db' -o -name '*.db-wal' \) -print 2>/dev/null | sort)
 }
 
 collect_retention() {
@@ -581,9 +792,22 @@ render_terminal() {
     fi
     print -r -- ""
 
+    print -r -- "App Policies"
+    if ((${#APP_POLICIES[@]} == 0)); then print -r -- "  none"; else
+        for row in "${APP_POLICIES[@]}"; do print_table_line "${row%%|*}" "$(display_text "${row#*|}")"; done
+    fi
+    print -r -- ""
+
     print -r -- "Trusted Projects"
     if ((${#TRUSTED_PROJECTS[@]} == 0)); then print -r -- "  none"; else
         for row in "${TRUSTED_PROJECTS[@]}"; do print_table_line "$(display_text "${row%%|*}")" "$(display_text "trust_level=${row#*|}")"; done
+    fi
+    print -r -- ""
+
+    print -r -- "Hooks and Rules"
+    if ((${#HOOK_SOURCES[@]} == 0 && ${#RULE_FILES[@]} == 0)); then print -r -- "  none"; else
+        for row in "${HOOK_SOURCES[@]}"; do print_table_line "hook" "$(display_text "$row")"; done
+        for row in "${RULE_FILES[@]}"; do print_table_line "rule" "$(display_text "$row")"; done
     fi
     print -r -- ""
 
@@ -708,6 +932,17 @@ json_automations() {
     printf '%s' "$out"
 }
 
+json_hook_sources() {
+    local out="[" idx=0 row
+    for row in "${HOOK_SOURCES[@]}"; do
+        ((idx > 0)) && out+=","
+        out+="{\"layer\":$(jstr_out "$(json_split_field "$row" 1)"),\"kind\":$(jstr "$(json_split_field "$row" 2)"),\"detail\":$(jstr_out "$(json_split_field "$row" 3)")}"
+        ((idx++))
+    done
+    out+="]"
+    printf '%s' "$out"
+}
+
 json_sensitive_files() {
     local out="[" idx=0 row
     for row in "${SENSITIVE_FILES[@]}"; do
@@ -743,16 +978,17 @@ render_json() {
     idx=0
     for name in "${MCP_NAMES[@]}"; do
         ((idx > 0)) && mcp+=","
-        mcp+="{\"name\":$(jstr_out "$name"),\"command\":$(jstr_out "${MCP_CMDS[$name]:-}"),\"args\":$(jstr_out "${MCP_ARGS[$name]:-}"),\"env_keys\":$(jstr "${MCP_ENVKEYS[$name]:-}"),\"env_risk_tags\":$(jstr "$(mcp_env_risk_tags "${MCP_ENVKEYS[$name]:-}")")}"
+        mcp+="{\"name\":$(jstr_out "$name"),\"command\":$(jstr_out "${MCP_CMDS[$name]:-}"),\"args\":$(jstr_out "${MCP_ARGS[$name]:-}"),\"url\":$(jstr_out "${MCP_URLS[$name]:-}"),\"enabled\":$(jstr "${MCP_ENABLED[$name]:-true}"),\"approval_modes\":$(jstr "${MCP_APPROVALS[$name]:-}"),\"env_keys\":$(jstr "${MCP_ENVKEYS[$name]:-}"),\"env_risk_tags\":$(jstr "$(mcp_env_risk_tags "${MCP_ENVKEYS[$name]:-}")")}"
         ((idx++))
     done
     mcp+="]"
 
-    printf '{"timestamp":%s,"hostname":%s,"username":%s,"codex_dir":%s,"summary":{"warn":%d,"review":%d,"info":%d},"findings":%s,"mcp_servers":%s,"plugins":%s,"plugin_cache":%s,"marketplaces":%s,"apps":%s,"trusted_projects":%s,"skills":%s,"automations":%s,"sensitive_files":%s,"retention":%s}' \
+    printf '{"timestamp":%s,"hostname":%s,"username":%s,"codex_dir":%s,"summary":{"warn":%d,"review":%d,"info":%d},"findings":%s,"config_layers":%s,"mcp_servers":%s,"plugins":%s,"plugin_cache":%s,"marketplaces":%s,"apps":%s,"app_policies":%s,"trusted_projects":%s,"hooks":%s,"rules":%s,"instruction_files":%s,"skills":%s,"automations":%s,"sensitive_files":%s,"retention":%s}' \
         "$(jstr "$TIMESTAMP")" "$(jstr "$HOSTNAME_VAL")" "$(jstr_out "$AUDIT_USER")" "$(jstr_out "$CODEX_DIR")" \
-        "$WARN_COUNT" "$REVIEW_COUNT" "$INFO_COUNT" "$findings" "$mcp" \
+        "$WARN_COUNT" "$REVIEW_COUNT" "$INFO_COUNT" "$findings" "$(json_key_values layer path "${CONFIG_LAYERS[@]}")" "$mcp" \
         "$(json_plugins_enabled)" "$(json_plugin_cache)" "$(json_key_values name source "${MARKETPLACES[@]}")" \
-        "$(json_key_values id enabled "${APPS[@]}")" "$(json_key_values path trust_level "${TRUSTED_PROJECTS[@]}")" "$(json_skills)" \
+        "$(json_key_values id enabled "${APPS[@]}")" "$(json_key_values id policy "${APP_POLICIES[@]}")" "$(json_key_values path trust_level "${TRUSTED_PROJECTS[@]}")" \
+        "$(json_hook_sources)" "$(json_key_values layer path "${RULE_FILES[@]}")" "$(json_key_values layer path "${INSTRUCTION_FILES[@]}")" "$(json_skills)" \
         "$(json_automations)" "$(json_sensitive_files)" "$(json_retention)"
 }
 
@@ -814,7 +1050,12 @@ EOF
     print -r -- '</tbody></table>'
     html_list_rows "Enabled Plugins" "${PLUGINS[@]}"
     html_list_rows "Plugin Cache" "${PLUGIN_DETAILS[@]}"
+    html_list_rows "App Policies" "${APP_POLICIES[@]}"
     html_list_rows "Trusted Projects" "${TRUSTED_PROJECTS[@]}"
+    html_list_rows "Config Layers" "${CONFIG_LAYERS[@]}"
+    html_list_rows "Hooks" "${HOOK_SOURCES[@]}"
+    html_list_rows "Rules" "${RULE_FILES[@]}"
+    html_list_rows "Instruction Files" "${INSTRUCTION_FILES[@]}"
     html_list_rows "Automations" "${AUTOMATIONS[@]}"
     html_list_rows "Skills" "${SKILLS[@]}"
     html_list_rows "Sensitive Files" "${SENSITIVE_FILES[@]}"
@@ -907,6 +1148,8 @@ render_diff_json() {
         [arr($doc)[] | getpath($path)? // [] | .[]? | .[$field] // empty] | unique;
       def skill_keys($doc):
         [arr($doc)[] | .skills[]? | ((.source // "") + ":" + (.name // ""))] | unique;
+      def pair_keys($doc; $path; $a; $b):
+        [arr($doc)[] | getpath($path)? // [] | .[]? | ((.[$a] // "") + ":" + (.[$b] // ""))] | unique;
       def section($name; $old; $new):
         {
           section: $name,
@@ -918,7 +1161,11 @@ render_diff_json() {
           section("mcp_servers"; keys_for($base; ["mcp_servers"]; "name"); keys_for($current; ["mcp_servers"]; "name")),
           section("plugins"; keys_for($base; ["plugins"]; "id"); keys_for($current; ["plugins"]; "id")),
           section("apps"; keys_for($base; ["apps"]; "id"); keys_for($current; ["apps"]; "id")),
+          section("app_policies"; pair_keys($base; ["app_policies"]; "id"; "policy"); pair_keys($current; ["app_policies"]; "id"; "policy")),
           section("trusted_projects"; keys_for($base; ["trusted_projects"]; "path"); keys_for($current; ["trusted_projects"]; "path")),
+          section("config_layers"; keys_for($base; ["config_layers"]; "path"); keys_for($current; ["config_layers"]; "path")),
+          section("hooks"; pair_keys($base; ["hooks"]; "layer"; "detail"); pair_keys($current; ["hooks"]; "layer"; "detail")),
+          section("rules"; keys_for($base; ["rules"]; "path"); keys_for($current; ["rules"]; "path")),
           section("automations"; keys_for($base; ["automations"]; "id"); keys_for($current; ["automations"]; "id")),
           section("skills"; skill_keys($base); skill_keys($current))
         ]
@@ -1047,6 +1294,8 @@ audit_one_user() {
     else
         collect_config
         collect_plugin_cache
+        collect_policy_files
+        finalize_config_findings
         collect_skills
         collect_automations
         collect_sensitive_files

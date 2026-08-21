@@ -6,7 +6,7 @@ Unofficial, read-only local security audit tool for Codex on macOS.
 
 日本語版 README: [README.ja.md](README.ja.md)
 
-`codex_audit.sh` inspects local Codex state under `~/.codex` and reports configuration that affects Codex's execution surface: MCP servers, enabled plugins, app connectors, trusted projects, skills, automations, sensitive files, local retention, and runtime state.
+`codex_audit.sh` inspects local Codex state under `~/.codex` and reports configuration that affects Codex's execution surface: config profiles, permission and sandbox policies, MCP servers, enabled plugins, app connectors, hooks, command rules, trusted project config, skills, automations, browser/computer-use state, sensitive files, local retention, and runtime state.
 
 The script is read-only. It does not modify audited files.
 
@@ -69,16 +69,19 @@ esp  WARN=4 REVIEW=6 INFO=6  ~/.codex
 
 | Area | Checks |
 | --- | --- |
-| Config | `~/.codex/config.toml`, model, features, notification hooks, unknown sections |
-| MCP Servers | Server names, commands, args, env var keys, env-key risk tags |
-| Plugins | Enabled plugins, cached packages, metadata provenance |
+| Config | User, profile, and trusted-project config layers; model, features, notification hooks, unknown sections |
+| Permissions | Approval policy, auto-review, sandbox mode, writable roots, permission profiles, command network access |
+| MCP Servers | Server names, commands/URLs, enabled state, tool approval modes, env var keys, env-key risk tags |
+| Plugins | Enabled plugins, cached packages, metadata provenance, plugin MCP approval modes |
 | Signature Artifacts | Presence of signature-like files such as `.sig`, `.asc`, `.pem`, `.crt`, `.minisig`, `.sigstore` |
-| Connectors | Enabled app connector entries |
-| Projects | `trusted` project entries |
+| Connectors | Enabled app entries, per-app/per-tool approvals, destructive and open-world tool policy |
+| Hooks and Rules | Inline and `hooks.json` command hooks, persistent `.rules` files |
+| Projects | `trusted` project entries and trusted project-local `.codex` layers |
 | Skills | User and plugin `SKILL.md` files |
 | Automations | `~/.codex/automations/*/automation.toml`, ACTIVE schedules, prompt risk tags |
 | Sensitive Files | `auth.json`, global state, installation ID, session index |
-| Local Data | SQLite DB and WAL file presence and large-file review findings |
+| Execution Config | Browser, Computer Use, and Chrome native-host configuration files |
+| Local Data | SQLite/DB and WAL presence up to two levels below `~/.codex`, including memories and current state stores |
 | Retention | Session, archived session, shell snapshot, and ambient suggestion counts/sizes/latest mtimes |
 | Runtime | Running Codex processes, sleep assertions, LaunchAgents, crontab |
 
@@ -171,7 +174,9 @@ Diff compares:
 - MCP servers by name
 - enabled plugins by ID
 - app connectors by ID
+- app approval policies
 - trusted projects by path
+- config layers, hooks, and command rules
 - automations by ID
 - skills by `source:name`
 
@@ -232,7 +237,7 @@ Resolved or mitigated limitations:
 
 - Normal audits do not require `jq`; plugin metadata falls back to path-derived values when `jq` is unavailable.
 - macOS-only behavior is enforced with an explicit preflight check.
-- Unknown `config.toml` sections are reported as INFO so config format drift is visible.
+- Current documented config section families are classified; genuinely unknown sections are reported as INFO so future format drift remains visible.
 - Fixture testing is supported through `--codex-dir`.
 
 Remaining limitations:
@@ -241,7 +246,7 @@ Remaining limitations:
 - `--diff` and `--diff-json` require `jq`.
 - Plugin provenance is heuristic only; CODEX-AUDIT does not verify signatures.
 - Signature-related artifact detection is an existence check only.
-- Codex configuration formats may change; unknown sections are surfaced, but new semantics may require collector updates.
+- The TOML collector intentionally focuses on security-relevant scalar settings and section structure; complex inline TOML values may require future collector updates.
 
 ## Documentation
 

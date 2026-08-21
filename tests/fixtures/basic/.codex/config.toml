@@ -1,4 +1,7 @@
 model = "gpt-5"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "live"
 
 [plugins."custom-plugin@local-marketplace"]
 enabled = true
@@ -9,8 +12,31 @@ trust_level = "trusted"
 [mcp_servers.local_shell]
 command = "bash"
 args = ["-lc", "echo ok"]
+default_tools_approval_mode = "approve"
 
 [mcp_servers.local_shell.env]
 API_TOKEN = "redacted-by-audit"
 TRUSTED_PATHS = "/tmp/example-project"
 
+[apps.test_connector]
+enabled = true
+destructive_enabled = true
+
+[apps.test_connector.tools."send_message"]
+approval_mode = "approve"
+
+[[hooks.PreToolUse]]
+matcher = "Shell"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/local/bin/check-command"
+
+[permissions.networked]
+
+[permissions.networked.network]
+enabled = true
+mode = "full"
+
+[shell_environment_policy.set]
+SERVICE_API_TOKEN = "fixture-secret"

@@ -4,7 +4,7 @@ Codex のローカル設定を読み取り専用で監査する、macOS 向け�
 
 > CODEX-AUDIT は独立した非公式プロジェクトです。OpenAI による提供、承認、スポンサー、保守を受けているものではありません。"OpenAI"、"Codex" および関連する製品名は OpenAI の商標である可能性があります。本 README では、ユーザーのローカル Codex 設定との相互運用性を説明する目的でのみ参照しています。
 
-`codex_audit.sh` は `~/.codex` 配下のローカル状態を確認し、Codex の実行面に関係する設定をレポートします。対象には MCP サーバー、有効化されたプラグイン、アプリ連携、trusted project、skill、自動化、機密性の高いローカルファイル、ローカル履歴、実行中の状態などが含まれます。
+`codex_audit.sh` は `~/.codex` 配下のローカル状態を確認し、Codex の実行面に関係する設定をレポートします。対象には config profile、permission / sandbox policy、MCP サーバー、有効化されたプラグイン、アプリ連携、hook、command rule、trusted project のローカル設定、skill、自動化、Browser / Computer Use 状態、機密性の高いローカルファイル、ローカル履歴、実行中の状態などが含まれます。
 
 このスクリプトは読み取り専用です。監査対象ファイルを変更しません。
 
@@ -67,16 +67,19 @@ esp  WARN=4 REVIEW=6 INFO=6  ~/.codex
 
 | 領域 | 確認内容 |
 | --- | --- |
-| Config | `~/.codex/config.toml`、model、features、notification hook、未知 section |
-| MCP Servers | サーバー名、command、args、env var key、env-key risk tag |
-| Plugins | 有効化 plugin、cached package、metadata provenance |
+| Config | user / profile / trusted-project config layer、model、features、notification hook、未知 section |
+| Permissions | approval policy、auto-review、sandbox mode、writable root、permission profile、command network access |
+| MCP Servers | サーバー名、command / URL、enabled state、tool approval mode、env var key、env-key risk tag |
+| Plugins | 有効化 plugin、cached package、metadata provenance、plugin MCP approval mode |
 | Signature Artifacts | `.sig`、`.asc`、`.pem`、`.crt`、`.minisig`、`.sigstore` など署名関連らしいファイルの有無 |
-| Connectors | 有効化された app connector |
-| Projects | `trusted` project |
+| Connectors | 有効化 app、app / tool 単位の approval、destructive / open-world tool policy |
+| Hooks and Rules | inline / `hooks.json` の command hook、永続 `.rules` file |
+| Projects | `trusted` project と trusted project-local `.codex` layer |
 | Skills | user / plugin の `SKILL.md` |
 | Automations | `~/.codex/automations/*/automation.toml`、ACTIVE schedule、prompt risk tag |
 | Sensitive Files | `auth.json`、global state、installation ID、session index |
-| Local Data | SQLite DB / WAL file の存在、大きいファイルの REVIEW |
+| Execution Config | Browser、Computer Use、Chrome native-host の設定 file |
+| Local Data | `~/.codex` から2階層以内の SQLite / DB / WAL（Memories と現行 state store を含む） |
 | Retention | session、archived session、shell snapshot、ambient suggestion の件数、サイズ、最新更新日時 |
 | Runtime | 実行中 Codex process、sleep assertion、LaunchAgents、crontab |
 
@@ -169,7 +172,9 @@ diff の比較対象:
 - MCP server name
 - enabled plugin ID
 - app connector ID
+- app approval policy
 - trusted project path
+- config layer、hook、command rule
 - automation ID
 - skill の `source:name`
 
@@ -230,7 +235,7 @@ test runner は `--codex-dir tests/fixtures/basic/.codex` を使います。そ�
 
 - 通常監査は `jq` なしでも動作。plugin metadata は path 由来の値に fallback
 - macOS 専用であることを preflight で明示
-- 未知の `config.toml` section を INFO として表示し、format drift に気づけるようにしている
+- 現行ドキュメントの config section family を分類し、真に未知の section は INFO として表示する
 - `--codex-dir` により fixture / コピー済み Codex directory の監査に対応
 
 残る制限:
@@ -239,7 +244,7 @@ test runner は `--codex-dir tests/fixtures/basic/.codex` を使います。そ�
 - `--diff` と `--diff-json` には `jq` が必要
 - plugin provenance は heuristic。CODEX-AUDIT は署名検証をしない
 - signature-related artifact detection は存在確認のみ
-- Codex の設定形式が変わる可能性がある。未知 section は表示するが、新しい意味づけには collector 更新が必要な場合がある
+- TOML collector は security-relevant な scalar setting と section structure を中心に扱う。複雑な inline TOML value は将来 collector 更新が必要な場合がある
 
 ## ドキュメント
 
